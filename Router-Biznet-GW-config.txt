@@ -1,0 +1,251 @@
+! ============================================================
+! ROUTER-BIZNET-GW - CLI DARI AWAL (VARIAN LAB GNS3)
+! Paste per blok (bukan sekaligus) biar console GNS3 ga drop karakter.
+! Produksi: lihat catatan di BLOK 2 (g0/0) dan BLOK 8 (default route).
+! write memory hanya setelah verifikasi (BLOK 9) lolos.
+! ============================================================
+
+! ===== BLOK 1: GLOBAL =====
+enable
+configure terminal
+hostname Router-Biznet-GW
+ip cef
+no ip domain lookup
+!
+
+! ===== BLOK 2: INTERFACE WAN =====
+interface GigabitEthernet0/0
+ description == KONEKSI WAN UPSTREAM TO ONT ==
+ ip address dhcp
+ ip nat outside
+ no shutdown
+ exit
+! PRODUKSI: ganti "ip address dhcp" dengan "ip address 192.168.1.2 255.255.255.0"
+!
+
+! ===== BLOK 3: TRUNK + SUB-INTERFACE LAN =====
+interface GigabitEthernet1/0
+ description == TRUNK DISTRIBUTION TO SWITCH LAN ==
+ no ip address
+ no shutdown
+ exit
+!
+interface GigabitEthernet1/0.10
+ description == LAN LANTAI 1 (SALES, ADMIN, ENGINEER) ==
+ encapsulation dot1Q 10
+ ip address 10.10.10.1 255.255.255.0
+ ip nat inside
+ exit
+!
+interface GigabitEthernet1/0.20
+ description == LAN LANTAI 2 (AREA VIRTU STANDBY) ==
+ encapsulation dot1Q 20
+ ip address 10.10.20.1 255.255.255.0
+ ip nat inside
+ exit
+!
+interface GigabitEthernet1/0.30
+ description == LAN LANTAI 3 (OFFICE & RUANG RAPAT) ==
+ encapsulation dot1Q 30
+ ip address 10.10.30.1 255.255.255.0
+ ip nat inside
+ exit
+!
+interface GigabitEthernet1/0.40
+ description == LAN DVR CCTV RUANG SERVER ==
+ encapsulation dot1Q 40
+ ip address 10.10.40.1 255.255.255.0
+ ip nat inside
+ exit
+!
+
+! ===== BLOK 4: NAT =====
+ip access-list standard ACL-NAT-LAN
+ permit 10.10.0.0 0.0.255.255
+ exit
+ip nat inside source list ACL-NAT-LAN interface GigabitEthernet0/0 overload
+!
+
+! ===== BLOK 5: ACL =====
+ip access-list extended ACL-VOICE-RTP
+ permit udp any any range 16384 32767
+ exit
+ip access-list extended ACL-INTERVLAN
+ permit ip 10.10.0.0 0.0.255.255 10.10.0.0 0.0.255.255
+ exit
+ip access-list extended ACL-LANTAI1
+ permit ip 10.10.10.0 0.0.0.255 any
+ permit ip any 10.10.10.0 0.0.0.255
+ exit
+ip access-list extended ACL-LANTAI2
+ permit ip 10.10.20.0 0.0.0.255 any
+ permit ip any 10.10.20.0 0.0.0.255
+ exit
+ip access-list extended ACL-LANTAI3
+ permit ip 10.10.30.0 0.0.0.255 any
+ permit ip any 10.10.30.0 0.0.0.255
+ exit
+ip access-list extended ACL-DVR
+ permit ip 10.10.40.0 0.0.0.255 any
+ permit ip any 10.10.40.0 0.0.0.255
+ exit
+!
+
+! ===== BLOK 6: CLASS-MAP =====
+class-map match-any CM-VOICE
+ match dscp ef
+ match access-group name ACL-VOICE-RTP
+ exit
+class-map match-all CM-INTERVLAN
+ match access-group name ACL-INTERVLAN
+ exit
+class-map match-all CM-LANTAI1
+ match access-group name ACL-LANTAI1
+ exit
+class-map match-all CM-LANTAI2
+ match access-group name ACL-LANTAI2
+ exit
+class-map match-all CM-LANTAI3
+ match access-group name ACL-LANTAI3
+ exit
+class-map match-all CM-DVR
+ match access-group name ACL-DVR
+ exit
+class-map match-all CM-UL-VOICE
+ match qos-group 1
+ exit
+class-map match-all CM-UL-LANTAI1
+ match qos-group 10
+ exit
+class-map match-all CM-UL-LANTAI2
+ match qos-group 20
+ exit
+class-map match-all CM-UL-LANTAI3
+ match qos-group 30
+ exit
+class-map match-all CM-UL-DVR
+ match qos-group 40
+ exit
+!
+
+! ===== BLOK 7: POLICY-MAP + SERVICE-POLICY =====
+policy-map MARK-UPLOAD-IN
+ class CM-VOICE
+  set qos-group 1
+ class CM-LANTAI1
+  set qos-group 10
+ class CM-LANTAI2
+  set qos-group 20
+ class CM-LANTAI3
+  set qos-group 30
+ class CM-DVR
+  set qos-group 40
+ exit
+!
+policy-map CHILD-DOWNLOAD
+ class CM-VOICE
+  priority 5000
+ class CM-LANTAI1
+  bandwidth 35000
+ class CM-LANTAI2
+  bandwidth 5000
+ class CM-LANTAI3
+  bandwidth 30000
+ class CM-DVR
+  bandwidth 15000
+ class class-default
+  fair-queue
+ exit
+!
+policy-map PARENT-DOWNLOAD
+ class CM-INTERVLAN
+  shape average 900000000
+ class class-default
+  shape average 95000000
+  service-policy CHILD-DOWNLOAD
+ exit
+!
+policy-map CHILD-UPLOAD
+ class CM-UL-VOICE
+  priority 5000
+ class CM-UL-LANTAI1
+  bandwidth 35000
+ class CM-UL-LANTAI2
+  bandwidth 5000
+ class CM-UL-LANTAI3
+  bandwidth 30000
+ class CM-UL-DVR
+  bandwidth 15000
+ class class-default
+  fair-queue
+ exit
+!
+policy-map PARENT-UPLOAD
+ class class-default
+  shape average 95000000
+  service-policy CHILD-UPLOAD
+ exit
+!
+interface GigabitEthernet1/0
+ service-policy input MARK-UPLOAD-IN
+ service-policy output PARENT-DOWNLOAD
+ exit
+interface GigabitEthernet0/0
+ service-policy output PARENT-UPLOAD
+ exit
+!
+
+! ===== BLOK 8: DHCP + ROUTE =====
+ip dhcp excluded-address 10.10.10.1 10.10.10.20
+ip dhcp excluded-address 10.10.20.1 10.10.20.20
+ip dhcp excluded-address 10.10.30.1 10.10.30.20
+ip dhcp excluded-address 10.10.40.1 10.10.40.50
+!
+ip dhcp pool VLAN10-LANTAI1
+ network 10.10.10.0 255.255.255.0
+ default-router 10.10.10.1
+ dns-server 8.8.8.8 1.1.1.1
+ lease 1
+ exit
+ip dhcp pool VLAN20-LANTAI2
+ network 10.10.20.0 255.255.255.0
+ default-router 10.10.20.1
+ dns-server 8.8.8.8 1.1.1.1
+ lease 1
+ exit
+ip dhcp pool VLAN30-LANTAI3
+ network 10.10.30.0 255.255.255.0
+ default-router 10.10.30.1
+ dns-server 8.8.8.8 1.1.1.1
+ lease 1
+ exit
+ip dhcp pool VLAN40-DVR
+ network 10.10.40.0 255.255.255.0
+ default-router 10.10.40.1
+ dns-server 8.8.8.8 1.1.1.1
+ lease 1
+ exit
+!
+! LAB: tidak ada route statis, default route datang dari DHCP (AD 254).
+! PRODUKSI: aktifkan baris di bawah ini
+! ip route 0.0.0.0 0.0.0.0 192.168.1.1
+!
+end
+
+! ===== BLOK 9: VERIFIKASI (jalankan manual) =====
+! show ip interface brief
+! show ip route
+! show ip nat statistics
+! show policy-map interface GigabitEthernet0/0 output
+! show policy-map interface GigabitEthernet1/0 input
+! show policy-map interface GigabitEthernet1/0 output
+! show ip dhcp binding
+!
+! Kalau NAT gagal ("couldn't allocate port", iperf/DNS gagal tapi ping lolos):
+! conf t
+! interface GigabitEthernet0/0
+!  shutdown
+!  no shutdown
+! end
+!
+! write memory   <- hanya setelah semua lolos

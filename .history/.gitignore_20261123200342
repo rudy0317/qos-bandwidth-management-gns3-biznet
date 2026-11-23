@@ -1,0 +1,5 @@
+# Abaikan file draf lama yang salah format
+PKL_Rudy_7G.docx
+
+# Abaikan file temporary / lock Microsoft Word
+~$*.docx
